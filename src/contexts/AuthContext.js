@@ -27,21 +27,8 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   const login = async (usernameOrEmail, password) => {
-    let loginEmail = usernameOrEmail.trim();
-
-    // If no @ symbol, treat as username and resolve to email
-    if (!loginEmail.includes('@')) {
-      const q = query(
-        collection(db, 'admins'),
-        where('username', '==', loginEmail)
-      );
-      const snap = await getDocs(q);
-      if (snap.empty) {
-        throw new Error('Invalid username or password');
-      }
-      loginEmail = snap.docs[0].data().email;
-    }
-
+    const input = usernameOrEmail.trim();
+    const loginEmail = input.includes('@') ? input : `${input}@herbalife.internal`;
     return signInWithEmailAndPassword(auth, loginEmail, password);
   };
 
