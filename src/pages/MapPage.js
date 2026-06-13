@@ -8,42 +8,49 @@ import AgentPanel from '../components/AgentPanel';
 import 'leaflet/dist/leaflet.css';
 
 export default function MapPage() {
-  const [agents, setAgents] = useState([]);
+  const [offices, setOffices] = useState([]);
+  const [agentsMap, setAgentsMap] = useState({});
   const [callHistoryMap, setCallHistoryMap] = useState({});
-  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [selectedOffice, setSelectedOffice] = useState(null);
 
   useEffect(() => {
-    const unsub1 = onSnapshot(collection(db, 'agents'), snap => {
-      setAgents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    const u1 = onSnapshot(collection(db, 'agencyOffices'), snap => {
+      setOffices(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    const unsub2 = onSnapshot(collection(db, 'callHistory'), snap => {
+    const u2 = onSnapshot(collection(db, 'agents'), snap => {
+      const map = {};
+      snap.docs.forEach(d => { map[d.id] = { id: d.id, ...d.data() }; });
+      setAgentsMap(map);
+    });
+    const u3 = onSnapshot(collection(db, 'callHistory'), snap => {
       const map = {};
       snap.docs.forEach(d => {
         const data = d.data();
-        if (!map[data.agentId]) map[data.agentId] = [];
-        map[data.agentId].push(data);
+        const key = data.officeId || data.agentId;
+        if (!map[key]) map[key] = [];
+        map[key].push(data);
       });
       setCallHistoryMap(map);
     });
-    return () => { unsub1(); unsub2(); };
+    return () => { u1(); u2(); u3(); };
   }, []);
 
-  const enrichedAgents = useMemo(() =>
-    agents.map(a => ({
-      ...a,
-      _status: getAgentStatus(callHistoryMap[a.id] || []),
-      _coords: getThanaCoordinates(a.district, a.thana)
-    })), [agents, callHistoryMap]);
+  const enrichedOffices = useMemo(() =>
+    offices.map(o => ({
+      ...o,
+      _agent: o.currentAgentId ? agentsMap[o.currentAgentId] : null,
+      _status: getAgentStatus(callHistoryMap[o.id] || []),
+      _coords: getThanaCoordinates(o.district, o.thana)
+    })), [offices, agentsMap, callHistoryMap]);
 
   const counts = useMemo(() => ({
-    red: enrichedAgents.filter(a => a._status === 'red').length,
-    yellow: enrichedAgents.filter(a => a._status === 'yellow').length,
-    green: enrichedAgents.filter(a => a._status === 'green').length,
-  }), [enrichedAgents]);
+    red: enrichedOffices.filter(o => o._status === 'red').length,
+    yellow: enrichedOffices.filter(o => o._status === 'yellow').length,
+    green: enrichedOffices.filter(o => o._status === 'green').length,
+  }), [enrichedOffices]);
 
   return (
     <div>
-      {/* Legend */}
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
         {[
           { color: '#DC2626', label: 'Overdue / Incomplete', count: counts.red },
@@ -82,12 +89,13 @@ export default function MapPage() {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          {enrichedAgents.map(agent => {
-            const color = getMapPinColor(agent._status);
+          {enrichedOffices.map(office => {
+            const color = getMapPinColor(office._status);
+            const agent = office._agent;
             return (
               <CircleMarker
-                key={agent.id}
-                center={agent._coords}
+                key={office.id}
+                center={office._coords}
                 radius={8}
                 pathOptions={{
                   fillColor: color,
@@ -96,13 +104,16 @@ export default function MapPage() {
                   weight: 2,
                 }}
                 eventHandlers={{
-                  click: () => setSelectedAgent(agent)
+                  click: () => setSelectedOffice(office)
                 }}
               >
                 <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
                   <div style={{ fontSize: '12px', lineHeight: '1.5' }}>
-                    <strong>{agent.firstName} {agent.lastName}</strong><br />
-                    {agent.thana}, {agent.district}
+                    {agent
+                      ? <><strong>{agent.firstName} {agent.lastName}</strong><br /></>
+                      : <><em style={{ color: '#9CA3AF' }}>Vacant</em><br /></>
+                    }
+                    {office.thana}, {office.district}
                   </div>
                 </Tooltip>
               </CircleMarker>
@@ -111,7 +122,11 @@ export default function MapPage() {
         </MapContainer>
       </div>
 
-      <AgentPanel agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
+      <AgentPanel
+        office={selectedOffice}
+        agentsMap={agentsMap}
+        onClose={() => setSelectedOffice(null)}
+      />
     </div>
   );
 }

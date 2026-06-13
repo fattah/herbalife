@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { bangladeshData } from '../data/bangladeshData';
 import { X, Upload, Download, CheckCircle, AlertCircle } from 'lucide-react';
@@ -98,18 +98,48 @@ export default function BulkUploadModal({ onClose }) {
       let success = 0, failed = 0, errors = [];
       for (const row of data) {
         try {
-          await addDoc(collection(db, 'agents'), {
+          const district = String(row.district || row['District'] || '').trim();
+          const thana = String(row.thana || row['Thana'] || '').trim();
+
+          // Create agent
+          const agentRef = await addDoc(collection(db, 'agents'), {
             firstName: String(row.firstName || row['First Name'] || '').trim(),
             lastName: String(row.lastName || row['Last Name'] || '').trim(),
             phone1: String(row.phone1 || row['Phone 1'] || '').trim(),
             phone2: String(row.phone2 || row['Phone 2'] || '').trim(),
             phone3: String(row.phone3 || row['Phone 3'] || '').trim(),
-            district: String(row.district || row['District'] || '').trim(),
-            thana: String(row.thana || row['Thana'] || '').trim(),
             photoURL: '',
+            currentOfficeId: null,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           });
+
+          // Find or create agency office
+          const officeSnap = await getDocs(
+            query(collection(db, 'agencyOffices'),
+              where('district', '==', district),
+              where('thana', '==', thana))
+          );
+
+          let officeId;
+          if (!officeSnap.empty) {
+            officeId = officeSnap.docs[0].id;
+            const existingAgentId = officeSnap.docs[0].data().currentAgentId;
+            if (existingAgentId) {
+              await updateDoc(doc(db, 'agents', existingAgentId), { currentOfficeId: null });
+            }
+            await updateDoc(doc(db, 'agencyOffices', officeId), { currentAgentId: agentRef.id });
+          } else {
+            const officeRef = await addDoc(collection(db, 'agencyOffices'), {
+              district,
+              thana,
+              currentAgentId: agentRef.id,
+              createdAt: new Date().toISOString()
+            });
+            officeId = officeRef.id;
+          }
+
+          await updateDoc(doc(db, 'agents', agentRef.id), { currentOfficeId: officeId });
           success++;
         } catch (err) {
           failed++;

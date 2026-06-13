@@ -1,47 +1,97 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
-  collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp
+  collection, addDoc, query, where, orderBy, onSnapshot
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { X, Phone, CheckCircle, AlertCircle, Clock } from 'lucide-react';
 import { getInitials, getCallStatusLabel, formatDateTime, getStatusBadgeProps, getAgentStatus } from '../utils/agentUtils';
 import toast from 'react-hot-toast';
 
-export default function AgentPanel({ agent, onClose }) {
+export default function AgentPanel({ office, agentsMap, onClose }) {
   const [callHistory, setCallHistory] = useState([]);
   const [note, setNote] = useState('');
   const [callStatus, setCallStatus] = useState('');
   const [saving, setSaving] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [selectedPhone, setSelectedPhone] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState('');
 
-  const isOpen = !!agent;
+  const isOpen = !!office;
 
   useEffect(() => {
-    if (!agent) return;
-    const q = query(
-      collection(db, 'callHistory'),
-      where('agentId', '==', agent.id),
-      orderBy('createdAt', 'desc')
-    );
-    const unsub = onSnapshot(q, snap => {
-      setCallHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-    return unsub;
-  }, [agent?.id]);
+    if (!office) return;
+    let unsub;
+    let mounted = true;
+    const connect = () => {
+      const q = query(
+        collection(db, 'callHistory'),
+        where('officeId', '==', office.id),
+        orderBy('createdAt', 'desc')
+      );
+      unsub = onSnapshot(
+        q,
+        snap => setCallHistory(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+        err => {
+          console.error('CallHistory panel listener error:', err);
+          if (mounted) setTimeout(connect, 5000);
+        }
+      );
+    };
+    connect();
+    return () => { mounted = false; unsub?.(); };
+  }, [office?.id]);
 
-  const handlePhoneClick = (phone) => {
+  const currentAgent = office?.currentAgentId ? agentsMap?.[office.currentAgentId] : null;
+  const agentStatus = getAgentStatus(callHistory);
+  const statusProps = getStatusBadgeProps(agentStatus);
+
+  // Build all agent groups: current agent first, then past agents derived from call history
+  const agentGroups = useMemo(() => {
+    const groups = [];
+    const seen = new Set();
+
+    if (currentAgent) {
+      seen.add(currentAgent.id);
+      groups.push({
+        agentId: currentAgent.id,
+        name: `${currentAgent.firstName} ${currentAgent.lastName}`,
+        phones: [currentAgent.phone1, currentAgent.phone2, currentAgent.phone3].filter(Boolean),
+        isCurrent: true
+      });
+    }
+
+    callHistory.forEach(c => {
+      if (c.agentId && !seen.has(c.agentId)) {
+        seen.add(c.agentId);
+        const agent = agentsMap?.[c.agentId];
+        groups.push({
+          agentId: c.agentId,
+          name: agent ? `${agent.firstName} ${agent.lastName}` : c.agentName,
+          phones: agent ? [agent.phone1, agent.phone2, agent.phone3].filter(Boolean) : [],
+          isCurrent: false
+        });
+      }
+    });
+
+    return groups;
+  }, [currentAgent, callHistory, agentsMap]);
+
+  const handlePhoneClick = (phone, agentId) => {
     setSelectedPhone(phone);
+    setSelectedAgentId(agentId);
     setShowForm(true);
   };
 
   const handleSaveCall = async () => {
     if (!callStatus) { toast.error('Please select a call status'); return; }
+    if (!office) return;
     setSaving(true);
     try {
+      const callingAgent = agentsMap?.[selectedAgentId] || currentAgent;
       await addDoc(collection(db, 'callHistory'), {
-        agentId: agent.id,
-        agentName: `${agent.firstName} ${agent.lastName}`,
+        officeId: office.id,
+        agentId: selectedAgentId || office.currentAgentId || '',
+        agentName: callingAgent ? `${callingAgent.firstName} ${callingAgent.lastName}` : '',
         phone: selectedPhone,
         note: note.trim(),
         status: callStatus,
@@ -51,48 +101,66 @@ export default function AgentPanel({ agent, onClose }) {
       setCallStatus('');
       setShowForm(false);
       setSelectedPhone('');
+      setSelectedAgentId('');
       toast.success('Call logged successfully');
     } catch (err) {
-      toast.error('Failed to save call log');
+      console.error(err);
+      toast.error('Failed to save call log: ' + (err.message || err.code || err));
     } finally {
       setSaving(false);
     }
   };
 
-  const phones = agent ? [agent.phone1, agent.phone2, agent.phone3].filter(Boolean) : [];
-  const agentStatus = agent ? getAgentStatus(callHistory) : 'gray';
-  const statusProps = getStatusBadgeProps(agentStatus);
-
   return (
     <>
       <div className={`panel-overlay ${isOpen ? 'open' : ''}`} onClick={onClose} />
       <div className={`slide-panel ${isOpen ? 'open' : ''}`}>
-        {agent && (
+        {office && (
           <>
             <div className="panel-header">
               <div className="panel-avatar">
-                {agent.photoURL
-                  ? <img src={agent.photoURL} alt={agent.firstName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  : getInitials(agent.firstName, agent.lastName)
+                {currentAgent?.photoURL
+                  ? <img src={currentAgent.photoURL} alt={currentAgent.firstName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : currentAgent ? getInitials(currentAgent.firstName, currentAgent.lastName) : '—'
                 }
               </div>
               <div className="panel-info">
-                <div className="panel-name">{agent.firstName} {agent.lastName}</div>
-                <div className="panel-sub">{agent.thana}, {agent.district}</div>
-                <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className="panel-name">
+                  {currentAgent ? `${currentAgent.firstName} ${currentAgent.lastName}` : 'Vacant'}
+                </div>
+                <div className="panel-sub">{office.thana}, {office.district}</div>
+                <div style={{ marginTop: '6px' }}>
                   <span className={`badge ${statusProps.className}`}>
                     <span className={`status-dot dot-${agentStatus}`} style={{ width: '7px', height: '7px' }}></span>
                     {statusProps.label}
                   </span>
                 </div>
-                <div className="panel-phones">
-                  {phones.map((phone, i) => (
-                    <button key={i} className="phone-chip" onClick={() => handlePhoneClick(phone)}>
-                      <Phone size={11} />
-                      {phone}
-                    </button>
-                  ))}
-                </div>
+
+                {/* All agents grouped with their phones */}
+                {agentGroups.map(group => (
+                  <div key={group.agentId} style={{ marginTop: '8px' }}>
+                    {agentGroups.length > 1 && (
+                      <div style={{ fontSize: '10px', color: 'var(--gray-400)', marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        {group.isCurrent ? 'Current' : 'Previous'} — {group.name}
+                      </div>
+                    )}
+                    <div className="panel-phones">
+                      {group.phones.map((phone, i) =>
+                        group.isCurrent ? (
+                          <a key={i} className="phone-chip" href={`tel:${phone}`}
+                            onClick={() => handlePhoneClick(phone, group.agentId)}>
+                            <Phone size={11} />{phone}
+                          </a>
+                        ) : (
+                          <a key={i} className="phone-chip" href={`tel:${phone}`}
+                            style={{ opacity: 0.65 }} title={`Previous agent: ${group.name}`}>
+                            <Phone size={11} />{phone}
+                          </a>
+                        )
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
               <button className="panel-close" onClick={onClose}><X size={20} /></button>
             </div>
@@ -167,9 +235,10 @@ export default function AgentPanel({ agent, onClose }) {
                   return (
                     <div key={entry.id} className="call-entry">
                       <div className="call-entry-header">
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                           <span className={`badge ${st.class}`}>{st.label}</span>
                           {entry.phone && <span style={{ fontSize: '11px', color: 'var(--gray-400)' }}>{entry.phone}</span>}
+                          {entry.agentName && <span style={{ fontSize: '11px', color: 'var(--gray-400)' }}>— {entry.agentName}</span>}
                         </div>
                         <span className="call-entry-time">{formatDateTime(entry.createdAt)}</span>
                       </div>

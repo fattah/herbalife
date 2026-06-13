@@ -323,9 +323,10 @@ tbody tr:hover { background: var(--olive-xfaint); cursor: pointer; }
   background: rgba(0,0,0,0.35);
   z-index: 100;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.2s ease;
 }
-.panel-overlay.open { opacity: 1; }
+.panel-overlay.open { opacity: 1; pointer-events: auto; }
 
 .slide-panel {
   position: fixed;
@@ -607,7 +608,7 @@ tbody tr:hover { background: var(--olive-xfaint); cursor: pointer; }
 .stat-label { font-size: 12px; color: var(--gray-500); margin-top: 3px; }
 
 /* ──────────── MAP ──────────── */
-.map-container { height: 580px; border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--gray-200); }
+.map-container { height: 580px; border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--gray-200); position: relative; z-index: 1; }
 .leaflet-container { height: 100%; width: 100%; }
 
 /* ──────────── PHOTO UPLOAD ──────────── */

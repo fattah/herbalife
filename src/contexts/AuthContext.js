@@ -29,7 +29,20 @@ export const AuthProvider = ({ children }) => {
   const login = async (usernameOrEmail, password) => {
     const input = usernameOrEmail.trim();
     const loginEmail = input.includes('@') ? input : `${input}@herbalife.internal`;
-    return signInWithEmailAndPassword(auth, loginEmail, password);
+    const result = await signInWithEmailAndPassword(auth, loginEmail, password);
+
+    // Apply any pending admin-set temporary password
+    try {
+      const snap = await getDoc(doc(db, 'admins', result.user.uid));
+      if (snap.exists() && snap.data().tempPassword) {
+        await updatePassword(result.user, snap.data().tempPassword);
+        await updateDoc(doc(db, 'admins', result.user.uid), { tempPassword: null });
+      }
+    } catch {
+      // Non-critical — continue login normally
+    }
+
+    return result;
   };
 
   const logout = () => signOut(auth);
@@ -48,21 +61,40 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        try {
+        const tryLoadProfile = async () => {
           const snap = await getDoc(doc(db, 'admins', user.uid));
+          return snap;
+        };
+        try {
+          const snap = await tryLoadProfile();
           if (snap.exists()) {
             setCurrentUser(user);
             setUserProfile({ id: snap.id, ...snap.data() });
           } else {
-            // User exists in Auth but not in admins collection — sign out
-            await signOut(auth);
-            setCurrentUser(null);
+            // Doc missing — could be seed writing it now. Don't sign out; App.js
+            // shows "Could not load your profile" until profile appears or user logs out.
+            setCurrentUser(user);
             setUserProfile(null);
           }
         } catch (err) {
-          console.error('Profile load error:', err);
-          setCurrentUser(user);
-          setUserProfile(null);
+          console.error('Profile load error, retrying...', err);
+          // Auth token may not be ready immediately on page refresh — retry once
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const snap = await tryLoadProfile();
+            if (snap.exists()) {
+              setCurrentUser(user);
+              setUserProfile({ id: snap.id, ...snap.data() });
+            } else {
+              setCurrentUser(user);
+              setUserProfile(null);
+            }
+          } catch (err2) {
+            console.error('Profile load retry failed:', err2);
+            // User is authenticated but profile unreadable — don't sign them out
+            setCurrentUser(user);
+            setUserProfile(null);
+          }
         }
       } else {
         setCurrentUser(null);

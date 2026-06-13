@@ -39,8 +39,30 @@ function AppContent() {
     );
   }
 
-  if (!currentUser || !userProfile) {
+  if (!currentUser) {
     return <LoginPage />;
+  }
+
+  if (!userProfile) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', background: 'var(--olive-dark)', flexDirection: 'column', gap: '16px'
+      }}>
+        <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px' }}>
+          Could not load your profile. Check your connection and try again.
+        </span>
+        <button
+          onClick={() => window.location.reload()}
+          style={{
+            padding: '8px 20px', borderRadius: '8px', background: 'white',
+            cursor: 'pointer', fontWeight: 500, border: 'none', fontSize: '13px'
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
 
   return (

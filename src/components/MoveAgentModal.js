@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { doc, updateDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, updateDoc, addDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { bangladeshData, getThanasForDistrict } from '../data/bangladeshData';
 import { X, ArrowRightLeft } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-export default function MoveAgentModal({ agent, onClose }) {
+export default function MoveAgentModal({ agent, office, onClose }) {
   const [district, setDistrict] = useState('');
   const [thana, setThana] = useState('');
   const [thanas, setThanas] = useState([]);
@@ -21,31 +21,51 @@ export default function MoveAgentModal({ agent, onClose }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!district || !thana) { toast.error('Select district and thana'); return; }
-    if (district === agent.district && thana === agent.thana) {
+    if (district === office.district && thana === office.thana) {
       toast.error('Agent is already in this thana'); return;
     }
     setSaving(true);
     try {
-      // Log the territory change
-      await addDoc(collection(db, 'territoryHistory'), {
-        agentId: agent.id,
-        agentName: `${agent.firstName} ${agent.lastName}`,
-        fromDistrict: agent.district,
-        fromThana: agent.thana,
-        toDistrict: district,
-        toThana: thana,
-        movedAt: new Date().toISOString()
-      });
-      // Update agent's current location
+      // 1. Vacate the old office
+      await updateDoc(doc(db, 'agencyOffices', office.id), { currentAgentId: null });
+
+      // 2. Find or create the target office
+      const snap = await getDocs(
+        query(collection(db, 'agencyOffices'),
+          where('district', '==', district),
+          where('thana', '==', thana))
+      );
+
+      let newOfficeId;
+      if (!snap.empty) {
+        newOfficeId = snap.docs[0].id;
+        // If the target office already has an agent, displace them
+        const existingAgentId = snap.docs[0].data().currentAgentId;
+        if (existingAgentId && existingAgentId !== agent.id) {
+          await updateDoc(doc(db, 'agents', existingAgentId), { currentOfficeId: null });
+        }
+        await updateDoc(doc(db, 'agencyOffices', newOfficeId), { currentAgentId: agent.id });
+      } else {
+        const officeRef = await addDoc(collection(db, 'agencyOffices'), {
+          district,
+          thana,
+          currentAgentId: agent.id,
+          createdAt: new Date().toISOString()
+        });
+        newOfficeId = officeRef.id;
+      }
+
+      // 3. Update agent's current office
       await updateDoc(doc(db, 'agents', agent.id), {
-        district,
-        thana,
+        currentOfficeId: newOfficeId,
         updatedAt: new Date().toISOString()
       });
-      toast.success(`Agent moved to ${thana}, ${district}`);
+
+      toast.success(`${agent.firstName} moved to ${thana}, ${district}`);
       onClose();
     } catch (err) {
-      toast.error('Failed to move agent');
+      console.error(err);
+      toast.error('Failed to move agent: ' + (err.message || err.code || err));
     } finally {
       setSaving(false);
     }
@@ -55,7 +75,10 @@ export default function MoveAgentModal({ agent, onClose }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: '420px' }}>
         <div className="modal-header">
-          <h2 className="modal-title"><ArrowRightLeft size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />Move Agent</h2>
+          <h2 className="modal-title">
+            <ArrowRightLeft size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />
+            Move Agent
+          </h2>
           <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>
         </div>
 
@@ -69,12 +92,12 @@ export default function MoveAgentModal({ agent, onClose }) {
                 Moving <strong>{agent.firstName} {agent.lastName}</strong>
               </p>
               <p style={{ fontSize: '12px', color: 'var(--gray-500)', marginTop: '4px' }}>
-                Current: {agent.thana}, {agent.district}
+                Current: {office.thana}, {office.district}
               </p>
             </div>
 
             <p style={{ fontSize: '12px', color: 'var(--gray-500)', marginBottom: '14px' }}>
-              Note: All previous call history will remain associated with the old thana for record-keeping.
+              The old office will remain vacant with its full call history intact.
             </p>
 
             <div className="form-group">
