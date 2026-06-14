@@ -1,4 +1,4 @@
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, addDoc, updateDoc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { auth, db } from './config';
 
@@ -112,6 +112,14 @@ const ensureAdminDoc = async (uid, data) => {
 };
 
 export const seedInitialAdmins = async () => {
+  // Wait for Firebase to restore any persisted session from the previous page load.
+  // If someone is already signed in, the data exists — skip seeding so we don't
+  // overwrite their session with superadmin and then sign them out.
+  const existingUser = await new Promise(resolve => {
+    const unsub = onAuthStateChanged(auth, user => { unsub(); resolve(user); });
+  });
+  if (existingUser) return;
+
   try {
     await withAuth('superadmin@herbalife.internal', 'secretmanager', async (uid) => {
       await ensureAdminDoc(uid, {
